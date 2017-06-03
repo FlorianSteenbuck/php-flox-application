@@ -110,15 +110,6 @@ class CookieJar
 	}
 }
 
-class LimaCityLoginHandler
-{
-	
-	function __construct()
-	{
-		parent::__construct(["login"], 1);
-	}
-}
-
 class LanguageUnsupported extends Exception {
 	protected $message = "Selected Language is unsupported";
 	protected $code = 9401;
