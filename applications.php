@@ -53,6 +53,22 @@ class RequestHandler
 		self::$application = $application;
 	}
 
+	function delete($path_parts, $args, $headers) {
+		return null;
+	}
+
+	function head($path_parts, $args, $headers) {
+		return null;
+	}
+
+	function options($path_parts, $args, $headers) {
+		return null;
+	}
+
+	function put($path_parts, $args, $headers) {
+		return null;
+	}
+
 	function get($path_parts, $args, $headers) {
 		return null;
 	}
@@ -64,6 +80,22 @@ class RequestHandler
 
 class RespRequestHandler extends RequestHandler
 {
+	function delete($path_parts, $args, $headers) {
+		return self::resp($path_parts, $args, $headers);
+	}
+
+	function head($path_parts, $args, $headers) {
+		return self::resp($path_parts, $args, $headers);
+	}
+
+	function options($path_parts, $args, $headers) {
+		return self::resp($path_parts, $args, $headers);
+	}
+
+	function put($path_parts, $args, $headers) {
+		return self::resp($path_parts, $args, $headers);
+	}
+
 	function get($path_parts, $args, $headers) {
 		return self::resp($path_parts, $args, $headers);
 	}
@@ -238,6 +270,26 @@ class Application
 		header("Content-Type: ".self::$language);
 	}
 
+	function delete($path_parts, $args, $headers) {
+		mine_type_header();
+		return self::getHandler($path_parts)->delete($path_parts, $args, $headers);
+	}
+
+	function head($path_parts, $args, $headers) {
+		mine_type_header();
+		return self::getHandler($path_parts)->head($path_parts, $args, $headers);
+	}
+
+	function options($path_parts, $args, $headers) {
+		mine_type_header();
+		return self::getHandler($path_parts)->options($path_parts, $args, $headers);
+	}
+
+	function put($path_parts, $args, $headers) {
+		mine_type_header();
+		return self::getHandler($path_parts)->put($path_parts, $args, $headers);
+	}
+
 	function get($path_parts, $args, $headers) {
 		mine_type_header();
 		return self::getHandler($path_parts)->get($path_parts, $args, $headers);
@@ -296,10 +348,9 @@ function get_all_urls($string) {
 function parse_file_format($format, $value, $placeholder='[$]') {
 	$pos_a = strpos($format, $placeholder);
 	if ($pos_a == -1) {
-		return $format . $value;
+  		return $format . $value;
 	}
 	$pos_b = $pos_a + (count($value) - 1);
-
 	return ($format.substr($format, $pos_a)) . $value . ($format.substr($format, 0, $pos_b));
 }
 
@@ -340,81 +391,112 @@ function get_files_from_multi($multi_files, $field_format="file") {
 	return $raw_files;
 }
 
-class CurlGatewayApplication extends Application
+function parse_resp($header_size, $response) {
+  $headers = array();
+  $status = ["HTTP/1.1", "200", "OK"];
+  $last_key = null;
+  $header_text = substr($response, 0, $header_size);
+  foreach (explode("\r\n", $header_text) as $i => $line) {
+    if ($i === 0) {
+      $status_args = explode(' ', $line);
+      if (count($status_args) > 2) {
+        $status[0] = $status_args[0];
+        $status[1] = $status_args[1];
+        $status[2] = substr($line, strlen($status_args[0]) + strlen($status_args[0]) - 3);
+      }
+    } else {
+      $args = explode(': ', $line);
+      if (count($args) > 1) {
+        $key = $args[0];
+        $last_key = $key;
+        $headers[$key] = substr($line, strlen($key) + 2);
+      } else if ($last_key !== null) {
+        // pseudo support for multiple line headers
+        $headers[$last_key] .= $line;
+      }
+    }
+  }
+  $body = substr($response, $header_size);
+
+  return [$status, $headers, $body];
+}
+
+class CurlGatewayApplication extends GatewayApplication
 {
 	protected $base_url = "http://127.0.0.1";
 	protected $auto_data_fields_to_form_fields = true;
 
-	protected function get_curl_conf($data=null, $data_type=null, $files=null) {
-		$config = array();
-		$headers = array();
+	protected function get_curl_conf($_headers=null, $data=null, $data_type=null, $files=null) {
+	    $config = array();
+	    $headers = $_headers === null ? array() : $_headers;
+	    
+	    $last_data = $data;
+	    $last_data_needed = true;
+	    
+	    $files = $files === null ? null : get_files_from_multi($files);
+	    $are_there_files = is_array($files) || count($files) > 0;
+	    
+	    $data = '';
+	    $boundary = '';
 
-		$last_data = $data;
-		$last_data_needed = true;
-
-		$files = get_files_from_multi($files);
-
-		$are_there_files = is_array($files) || count($files) > 0;
-
-		$data = '';
-		$boundary = '';
-		if ($files !== null) {
-			$boundary = hash('sha256', uniqid('', true));
-    		$delimiter = '-------------' . $boundary;
-
-    		if ($auto_data_fields_to_form_fields && !is_int_key_array($last_data)) {
-    			$last_data_needed = false;
-    			foreach ($last_data as $name => $content) {
-        			$data .= "--" . $delimiter . "\r\n"
-            			. 'Content-Disposition: form-data; name="' . $name . "\"\r\n\r\n"
-            			. $content . "\r\n";
+	    if ($files !== null) {
+	      $boundary = hash('sha256', uniqid('', true));
+	        $delimiter = '-------------' . $boundary;
+	        if ($last_data_needed && is_array($last_data) && !is_int_key_array($last_data)) {
+	          $last_data_needed = false;
+	          foreach ($last_data as $name => $content) {
+	              $data .= "--" . $delimiter . "\r\n"
+	                  . 'Content-Disposition: form-data; name="' . $name . "\"\r\n\r\n"
+	                  . $content . "\r\n";
+	          }
+	        }
+	        foreach ($files as $file) {
+	            $data .= "--" . $delimiter . "\r\n"
+	                . 'Content-Disposition: form-data; name="' . $file["name"] . '"; filename="' . $file["	filename"] . '"' . "\r\n\r\n"
+	                . $file["content"] . "\r\n";
+	        }
+	        $data .= "--" . $delimiter . "--\r\n";
+	    }
+	    
+	    if ($last_data !== null && $last_data_needed) {
+	  		$data .= $last_data;
+	    }
+	    
+	    $config[CURLOPT_RETURNTRANSFER] = true;
+	    $config[CURLOPT_HEADER] = true;
+	    $config[CURLOPT_VERBOSE] = true;
+	    
+	    if ($data !== null) {
+	    		$config[CURLOPT_POST] = true;
+	    		$config[CURLOPT_POSTFIELDS] = $data;
+	    		$headers['Content-Length'] = strlen($data);
+	    		$content_type = null;
+    			if ($data_type !== null) {
+      			$content_type = $data_type;
+    			} else if ($are_there_files) {
+      			$content_type = 'multipart/form-data';
     			}
-    		}
-
-    		foreach ($files as $file) {
-        		$data .= "--" . $delimiter . "\r\n"
-        		    . 'Content-Disposition: form-data; name="' . $file["name"] . '"; filename="' . $file["filename"] . '"' . "\r\n\r\n"
-        		    . $file["content"] . "\r\n";
-    		}
-	    	$data .= "--" . $delimiter . "--\r\n";
-    	}
-
-    	if ($last_data !== null && $last_data_needed) {
-    		$data .= $last_data;
-    	}
-
-		$config[CURLOPT_RETURNTRANSFER] = true;
-		$config[CURLOPT_HEADER] = true;
-		$config[CURLOPT_VERBOSE] = true;
-		if ($data !== '') {
-			$config[CURLOPT_POST] = true;
-			$config[CURLOPT_POSTFIELDS] = $data;
-			$headers[] = 'Content-Length: ' . strlen($data);
-
-			$content_type = null;
-			if ($data_type !== null) {
-				$content_type = 'Content-Type: '.$data_type;
-			} else if ($are_there_files) {
-				$content_type = 'Content-Type: multipart/form-data';
-			}
-
-			if ($are_there_files) {
-				$content_type .= '; boundary=' . $delimiter;
-			}
-
-			if ($content_type !== null) {
-				$headers[] = $content_type;
-			}
-		}
-
-		$config[CURLOPT_HTTPHEADER] = $headers;
-		return $config;
+   			if ($are_there_files) {
+      			$content_type .= '; boundary=' . $delimiter;
+    			}
+    			if ($content_type !== null) {
+      			$headers['Content-Type'] = $content_type;
+    			}
+  		}
+  		if (is_array($headers) && !is_int_key_array($headers)) {
+    			foreach ($headers as $key => $value) {
+      			$headers[$key] = $value;
+    			}
+  		}
+  		$config[CURLOPT_HTTPHEADER] = $headers;
+  		return $config;
 	}
 
-	function curl_call($path, $data=null, $data_type=null, $files=null) {
+	function curl_call($path, $headers=null, $data=null, $data_type=null, $files=null) {
 		$args = array();
 		$args["path"] = $path;
 		$args["curl"] = array();
+		$args["curl"]["headers"] = $headers;
 		$args["curl"]["data"] = $data;
 		$args["curl"]["data_type"] = $data_type;
 		$args["curl"]["files"] = $files;
@@ -427,11 +509,15 @@ class CurlGatewayApplication extends Application
 		if (array_key_exists("curl", $args)) {
 			$curl_args = $args["curl"];
 
+			$curl_headers = null;
 			$curl_data = null;
 			$curl_data_type = null;
 			$curl_files = null;
 
 			$curl = curl_init($base_url . "/" . $args["path"]);
+			if (array_key_exists("headers", $curl_args)) {
+				$curl_headers = $curl_args["headers"];
+			}
 			if (array_key_exists("data", $curl_args)) {
 				$curl_data = $curl_args["data"];
 			}
@@ -443,7 +529,7 @@ class CurlGatewayApplication extends Application
 			if (array_key_exists("files", $curl_args)) {
 				$curl_files = $curl_args["files"];
 			}
-			curl_setopt_array($curl, get_curl_conf($curl_data, $curl_data_type, $curl_files));
+			curl_setopt_array($curl, get_curl_conf($curl_headers, $curl_data, $curl_data_type, $curl_files));
 			$result = curl_exec($curl);
 			
 			$header_size = curl_getinfo($curl, CURLINFO_HEADER_SIZE);
@@ -451,19 +537,19 @@ class CurlGatewayApplication extends Application
 			$last_key = null;
 			$header_text = substr($response, 0, $header_size);
 			foreach (explode("\r\n", $header_text) as $i => $line) {
-        		if ($i === 0) {
-            		$status = explode(' ', $line);
-        		} else {
-            		$args = explode(': ', $line);
-            		if (count($args) > 1) {
-            			$last_key = $args[0];
-            			$headers[$args[0]] = substr($args, strlen($args[0]));
-            		} else if ($last_key !== null) {
-            			// pseudo support for multiple line headers
-            			$headers[$last_key] .= $line;
-            		}
-        		}
-        	}
+      			if ($i === 0) {
+          			$status = explode(' ', $line);
+      			} else {
+          			$args = explode(': ', $line);
+          			if (count($args) > 1) {
+          				$last_key = $args[0];
+          				$headers[$args[0]] = substr($args, strlen($args[0]));
+          			} else if ($last_key !== null) {
+          				// pseudo support for multiple line headers
+          				$headers[$last_key] .= $line;
+          			}
+      			}
+      		}
 			$body = substr($response, $header_size);
 			
 			curl_close($curl);
@@ -475,7 +561,7 @@ class CurlGatewayApplication extends Application
 }
 
 
-class CookieJarCurlGatewayApplication extends GatewayApplication
+class CookieJarCurlGatewayApplication extends CurlGatewayApplication
 {
 	protected $cookiejar = null;
 
@@ -513,6 +599,63 @@ class CookieJarCurlGatewayApplication extends GatewayApplication
 		self::$cookiejar->merge(new CookieJar($cookies));
 
 		return $resp_args;
+	}
+}
+
+function build_args($headers) {
+	$args = array();
+	$get = array();
+	$post = array();
+	if (isset($_GET)) {
+		$get = $_GET;
+		$args = array_merge_recursive($args, $_GET);
+	}
+
+	if (isset($_POST)) {
+		$post = $_POST;
+		$args = array_merge_recursive($args, $_POST);
+	}
+
+	return array("args" => $args, "post" => $post, "get" => $get);
+}
+
+function build_path($path_str) {
+	$path_parts = explode('/', $path_str);
+	foreach ($path_parts as $i => $path_part) {
+		if ($path_part === "") {
+			unset($path_parts[$i]);
+		}
+	}
+
+	return $path_parts;
+}
+
+function handle_request($path_str, $application) {
+	$method = $_SERVER['REQUEST_METHOD'];
+
+	$headers = getallheaders();
+	$args = build_args($headers);
+	$paths = build_path($path_str);
+
+	switch ($method) {
+		case 'PUT':
+			$application->put($paths, $args, $headers);
+			break;
+		case 'POST':
+			$application->post($paths, $args, $headers);
+			break;
+		case 'HEAD':
+			$application->head($paths, $args, $headers);
+			break;
+		case 'DELETE':
+			$application->delete($paths, $args, $headers);
+			break;
+		case 'OPTIONS':
+			$application->options($paths, $args, $headers);
+			break;
+  		default:
+			$application->get($paths, $args, $headers);
+			break;
 	}
 }
 
